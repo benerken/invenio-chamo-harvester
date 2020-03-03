@@ -112,7 +112,7 @@ def get_mef_person_link(id, key, value):
     """Get mef person link."""
     # https://mef.test.rero.ch/api/mef/?q=viaf_pid:67752559
     prod_host = 'mef.rero.ch'
-    test_host = 'mefdev.test.rero.ch'
+    test_host = 'mef.test.rero.ch'
     mef_link = None
     if id:
         url = "{mef}/?q=viaf_pid:{viaf_pid}&size=1".format(

@@ -18,7 +18,11 @@ from flask.cli import with_appcontext
 from invenio_chamo_harvester.api import ChamoRecordHarvester
 from invenio_chamo_harvester.tasks import (process_bulk_queue,
                                            queue_records_to_harvest)
-
+from invenio_pidstore.models import PersistentIdentifier, PIDStatus, RecordIdentifier
+from rero_ils.modules.documents.api import Document
+from rero_ils.modules.documents.models import DocumentIdentifier
+from sqlalchemy import func
+from invenio_db import db
 
 def abort_if_false(ctx, param, value):
     """Abort command is value is False."""
@@ -93,6 +97,33 @@ def run(delayed, concurrency):
         click.secho('Retrieve queued records...', fg='green')
         ChamoRecordHarvester().process_bulk_queue()
 
+
+@chamo.command("max_id")
+@click.option('--with-deleted', '-d', is_flag=True,
+              help='With deleted record.')
+@with_appcontext
+def max_id(with_deleted):
+        """Get max record identifier."""
+        """
+        query = PersistentIdentifier.query.filter_by(
+            pid_type=Document.provider.pid_type
+        )
+        """
+        max_recid = DocumentIdentifier().max()
+        """
+        max_recid = db.session.query(
+            func.max("recid").filter_by(
+                pid_type=Document.provider.pid_type
+            )).scalar()
+        """
+        print("max bibid : ", max_recid)
+        """
+        return max_recid if max_recid else 0
+        
+        if not with_deleted:
+            query = query.filter_by(status=PIDStatus.REGISTERED)
+        return query
+        """
 
 @chamo.group(chain=True)
 def queue():

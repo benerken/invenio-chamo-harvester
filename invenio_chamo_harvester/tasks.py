@@ -21,10 +21,11 @@ from flask import current_app
 from invenio_db import db
 from invenio_indexer.api import RecordIndexer
 from invenio_jsonschemas import current_jsonschemas
-
 from rero_ils.modules.documents.api import Document, DocumentsSearch
-from rero_ils.modules.items.api import Item
+from rero_ils.modules.documents.models import DocumentIdentifier
 from rero_ils.modules.holdings.api import Holding
+from rero_ils.modules.items.api import Item
+from rero_ils.modules.providers import append_fixtures_new_identifiers
 
 from .api import ChamoRecordHarvester
 from .utils import extract_records_id, map_item_type, map_locations
@@ -116,6 +117,10 @@ def bulk_records(records):
     holding_id_iterator = []
     indexer = RecordIndexer()
     start_time = datetime.now()
+    celery_kwargs = {
+        'kwargs': {
+        }
+    }
     for record in records:
         try:
             if record.get('frbr', False):
@@ -144,12 +149,13 @@ def bulk_records(records):
                 document['$schema'] = record_schema
 
                 created_time = datetime.now()
+                current_app.logger.info('create document')
                 document = Document.create(
                     document,
                     dbcommit=False,
                     reindex=False
                 )
-                
+                db.session.add(DocumentIdentifier(recid=document.pid))
                 record_id_iterator.append(document.id)
 
                 uri_documents = url_api.format(host=host_url,
@@ -183,7 +189,7 @@ def bulk_records(records):
                                 cica = holding.get('circulation_category')) : result.get('pid')
                         }
                     )
-                    
+                    # holding_pids.append(result.pid)
                     holding_id_iterator.append(result.id)
                 
                 for item in record.get('items'):
@@ -214,7 +220,7 @@ def bulk_records(records):
                         dbcommit=False,
                         reindex=False
                     )
-
+                    # item_pids.append(result.pid)
                     item_id_iterator.append(result.id)
 
                 n_created += 1
@@ -227,7 +233,13 @@ def bulk_records(records):
                 start_time = datetime.now()
 
                 db.session.commit()
+                
                 execution_time = datetime.now() - start_time
+                
+                current_app.logger.info('{nb} commited records in {execution_time}.'
+                            .format(nb=len(record_id_iterator),
+                                    execution_time=execution_time))
+                
                 click.secho('{nb} commited records in {execution_time}.'
                             .format(nb=len(record_id_iterator),
                                     execution_time=execution_time),
@@ -237,17 +249,23 @@ def bulk_records(records):
                             .format(n=len(holding_id_iterator)), fg='white')
                 indexer.bulk_index(holding_id_iterator)
                 click.secho('process queue...', fg='yellow')
+                
                 indexer.process_bulk_queue()
+
                 click.secho('sending {n} items to indexer queue.'
                             .format(n=len(item_id_iterator)), fg='white')
                 indexer.bulk_index(item_id_iterator)
                 click.secho('process queue...', fg='yellow')
+                
                 indexer.process_bulk_queue()
+
                 click.secho('sending {n} documents to indexer queue.'
                             .format(n=len(record_id_iterator)), fg='white')
                 indexer.bulk_index(record_id_iterator)
                 click.secho('process queue...', fg='yellow')
+                
                 indexer.process_bulk_queue()
+
                 execution_time = datetime.now() - start_time
                 click.secho('indexing records process in {execution_time}.'
                             .format(execution_time=execution_time),
@@ -262,11 +280,26 @@ def bulk_records(records):
             n_rejected += 1
             click.secho('Error processing record [{id}] : {e}'
                         .format(id=record.get('_id'), e=e), fg='red')
+            current_app.logger.error('Error processing record [{id}] : {e}'
+                        .format(id=record.get('_id'), e=e))
+    try:
+        start_time = datetime.now()
+        db.session.commit()
+        execution_time = datetime.now() - start_time
+        current_app.logger.info('{nb} commited records in {execution_time}.'
+                    .format(nb=len(record_id_iterator),
+                            execution_time=execution_time))
+        indexer.bulk_index(holding_id_iterator)
+        indexer.process_bulk_queue()
+        indexer.bulk_index(item_id_iterator)
+        indexer.process_bulk_queue()
+        indexer.bulk_index(record_id_iterator)
+        indexer.process_bulk_queue()
+    except Exception as e:
+        current_app.logger.error(e)
+
+    max_recid = DocumentIdentifier().max()
+    DocumentIdentifier._set_sequence(max_recid)
     db.session.commit()
-    indexer.bulk_index(holding_id_iterator)
-    indexer.process_bulk_queue()
-    indexer.bulk_index(item_id_iterator)
-    indexer.process_bulk_queue()
-    indexer.bulk_index(record_id_iterator)
-    indexer.process_bulk_queue()
+
     return n_created
