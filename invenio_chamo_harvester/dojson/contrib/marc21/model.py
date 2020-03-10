@@ -34,6 +34,8 @@ import requests
 from dojson import utils
 from isbnlib import EAN13, clean, to_isbn13
 
+from flask import current_app
+
 from rero_ils.dojson.utils import ReroIlsMarc21Overdo, error_print, \
     get_field_items, get_field_link_data, make_year, not_repetitive, \
     remove_trailing_punctuation
@@ -112,7 +114,7 @@ def get_mef_person_link(id, key, value):
     """Get mef person link."""
     # https://mef.test.rero.ch/api/mef/?q=viaf_pid:67752559
     prod_host = 'mef.rero.ch'
-    test_host = 'mef.test.rero.ch'
+    test_host = current_app.config['RERO_ILS_MEF_HOST'] #'mef.test.rero.ch'
     mef_link = None
     if id:
         url = "{mef}/?q=viaf_pid:{viaf_pid}&size=1".format(
