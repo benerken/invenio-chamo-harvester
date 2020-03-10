@@ -34,6 +34,8 @@ import requests
 from dojson import utils
 from isbnlib import EAN13, clean, to_isbn13
 
+from flask import current_app
+
 from rero_ils.dojson.utils import ReroIlsMarc21Overdo, error_print, \
     get_field_items, get_field_link_data, make_year, not_repetitive, \
     remove_trailing_punctuation
@@ -112,7 +114,7 @@ def get_mef_person_link(id, key, value):
     """Get mef person link."""
     # https://mef.test.rero.ch/api/mef/?q=viaf_pid:67752559
     prod_host = 'mef.rero.ch'
-    test_host = 'mefdev.test.rero.ch'
+    test_host = current_app.config['RERO_ILS_MEF_HOST'] #'mef.test.rero.ch'
     mef_link = None
     if id:
         url = "{mef}/?q=viaf_pid:{viaf_pid}&size=1".format(
@@ -378,7 +380,7 @@ def marc21_to_copyright_date(self, key, value):
         for copyright_date in copyrights_date:
             match = re.search(r'^([©℗c])+\s*(\d{4}.*)', copyright_date)
             if match:
-                
+
                 copyright_date = ' '.join((
                     copyright_per_code[match.group(1)] ,
                     match.group(2)
