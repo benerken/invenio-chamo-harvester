@@ -15,10 +15,15 @@ import yaml
 from celery.messaging import establish_connection
 from flask import current_app
 from flask.cli import with_appcontext
-from invenio_chamo_harvester.api import ChamoRecordHarvester
+from invenio_chamo_harvester.api import ChamoRecordHarvester, ChamoBibRecord
 from invenio_chamo_harvester.tasks import (process_bulk_queue,
                                            queue_records_to_harvest)
-
+from invenio_chamo_harvester.utils import get_max_record_pid
+from invenio_pidstore.models import PersistentIdentifier, PIDStatus, RecordIdentifier
+from rero_ils.modules.documents.api import Document
+from rero_ils.modules.documents.models import DocumentIdentifier
+from sqlalchemy import func
+from invenio_db import db
 
 def abort_if_false(ctx, param, value):
     """Abort command is value is False."""
@@ -43,7 +48,7 @@ def chamo():
 @with_appcontext
 def harvest_chamo(size, next_id, modified_since, verbose, file):
     """Harvest all records."""
-    
+
     try:
         count = 0
         if file:
@@ -92,6 +97,24 @@ def run(delayed, concurrency):
     else:
         click.secho('Retrieve queued records...', fg='green')
         ChamoRecordHarvester().process_bulk_queue()
+
+@chamo.command("record")
+@click.option('--bibid', '-i', default=0, type=int,
+              help='BIBID of the record.')
+@with_appcontext
+def record(bibid):
+    """Run transform to invenio record."""
+    if bibid>0:
+        print(ChamoBibRecord.get_record_by_id(bibid).document)
+
+
+@chamo.command("max_id")
+@click.option('--with-deleted', '-d', is_flag=True,
+              help='With deleted record.')
+@with_appcontext
+def max_id(with_deleted):
+    """Get max record identifier."""
+    print(get_max_record_pid('doc'))
 
 
 @chamo.group(chain=True)

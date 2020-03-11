@@ -9,7 +9,8 @@
 """Utility functions for data processing."""
 
 import requests
-
+from invenio_pidstore.models import PersistentIdentifier
+from sqlalchemy import text
 
 def extract_records_id(data):
     """Extract a record id from REST data."""
@@ -20,6 +21,11 @@ def extract_records_id(data):
         records.append(record_id)
     return records
 
+def get_max_record_pid(pid_type):
+    """Get max record PID."""
+    return PersistentIdentifier.query.filter_by(
+        pid_type=pid_type).order_by(text('pid_value desc')).first().id
+     
 
 def map_item_type(type):
     """Returns mapped type."""

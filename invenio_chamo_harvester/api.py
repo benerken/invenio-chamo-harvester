@@ -247,6 +247,12 @@ class ChamoBibRecord(object):
         return etree.XML(xml, parser=XMLParser)
 
     @property
+    def document(self):
+        """Do json converted bibliographic record."""
+        rec = create_record(self.xml)
+        return marc21.do(rec)
+
+    @property
     def items(self):
         """The linked items of bibliographic record."""
         return self.data.get('items') or []
@@ -258,8 +264,27 @@ class ChamoBibRecord(object):
 
     @classmethod
     def get_record_by_uri(self, uri):
-        """Get chamo record by pid value."""
+        """Get chamo record by uri value."""
         try:
+            request = requests.get(uri, auth=(
+                current_app.config['CHAMO_HARVESTER_CHAMO_USER'],
+                current_app.config['CHAMO_HARVESTER_CHAMO_PASSWORD']))
+            return self(request.json())
+        except Exception as e:
+            click.secho(
+                'Get ressource Error: {e}'.format(e=e),
+                fg='red'
+            )
+            return None
+    
+    @classmethod
+    def get_record_by_id(self, id):
+        """Get chamo record by id value."""
+        try:
+            uri = uri='{base_url}/invenio/bib/{id}'.format(
+                base_url=current_app.config['CHAMO_HARVESTER_CHAMO_BASE_URL'],
+                id=str(id))
+            
             request = requests.get(uri, auth=(
                 current_app.config['CHAMO_HARVESTER_CHAMO_USER'],
                 current_app.config['CHAMO_HARVESTER_CHAMO_PASSWORD']))

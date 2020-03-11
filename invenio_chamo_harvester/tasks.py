@@ -13,6 +13,7 @@ from __future__ import absolute_import, print_function
 
 import time
 from datetime import datetime
+import sys
 
 import click
 import requests
@@ -24,7 +25,7 @@ from invenio_jsonschemas import current_jsonschemas
 
 from rero_ils.modules.documents.api import Document, DocumentsSearch
 from rero_ils.modules.items.api import Item
-from rero_ils.modules.holdings.api import Holding
+from .utils import get_max_record_pid
 
 from .api import ChamoRecordHarvester
 from .utils import extract_records_id, map_item_type, map_locations
@@ -103,6 +104,9 @@ def delete_record(record_uuid):
 @shared_task(ignore_result=True)
 def bulk_records(records):
     """Records creation."""
+    bulk_size = current_app.config['CHAMO_HARVESTER_BULK_SIZE']
+    current_app.logger.info('harverster bulk size : {size}'.format(
+        size=bulk_size))
     n_updated = 0
     n_rejected = 0
     n_created = 0
@@ -149,13 +153,12 @@ def bulk_records(records):
                     dbcommit=False,
                     reindex=False
                 )
-                
                 record_id_iterator.append(document.id)
-
+                db.session.add(DocumentIdentifier(recid=document.get('pid')))
                 uri_documents = url_api.format(host=host_url,
                                                doc_type='documents',
-                                               pid=document.pid)
-                
+                                               pid=document.get('pid'))
+
                 map_holdings = {}
                 for holding in record.get('holdings'):
                     holding['$schema'] = holding_schema
@@ -168,7 +171,7 @@ def bulk_records(records):
                     holding['location'] = {
                         '$ref': map_locations(str(holding.get('location')))
                         }
-                    
+
                     created_time = datetime.now()
 
                     result = Holding.create(
@@ -176,16 +179,15 @@ def bulk_records(records):
                         dbcommit=False,
                         reindex=False
                     )
-                    
+
                     map_holdings.update({
                             '{location}#{cica}'.format(
                                 location = holding.get('location'),
                                 cica = holding.get('circulation_category')) : result.get('pid')
                         }
                     )
-                    
                     holding_id_iterator.append(result.id)
-                
+
                 for item in record.get('items'):
                     item['$schema'] = item_schema
                     item['document'] = {
@@ -202,13 +204,22 @@ def bulk_records(records):
                         '{location}#{cica}'.format(
                             location = item.get('location'),
                             cica = item.get('item_type')))
+                    if holding_pid is None:
+                        click.secho('holding pid is None for record : {id} '.format(
+                            id=document.pid
+                        ), fg='red')
+                        click.secho('holding map : {map}.'.format(
+                            map=map_holdings), fg='white')
+                        click.secho('item to map : {location}#{cica}'.format(
+                            location = item.get('location'),
+                            cica = item.get('item_type')), fg='yellow')
 
                     item['holding'] = {
                         '$ref': url_api.format(host=host_url,
                                     doc_type='holdings',
                                     pid=holding_pid)
                         }
-                    
+
                     result = Item.create(
                         item,
                         dbcommit=False,
@@ -216,9 +227,9 @@ def bulk_records(records):
                     )
 
                     item_id_iterator.append(result.id)
-
                 n_created += 1
-            if n_created % 1000 == 0:
+
+            if n_created % bulk_size == 0:
                 execution_time = datetime.now() - start_time
                 click.secho('{nb} created records in {execution_time}.'
                             .format(nb=len(record_id_iterator),
@@ -227,6 +238,7 @@ def bulk_records(records):
                 start_time = datetime.now()
 
                 db.session.commit()
+
                 execution_time = datetime.now() - start_time
                 click.secho('{nb} commited records in {execution_time}.'
                             .format(nb=len(record_id_iterator),
@@ -258,10 +270,32 @@ def bulk_records(records):
                 holding_id_iterator.clear()
                 item_id_iterator.clear()
                 start_time = datetime.now()
+
         except Exception as e:
             n_rejected += 1
-            click.secho('Error processing record [{id}] : {e}'
-                        .format(id=record.get('_id'), e=e), fg='red')
+            current_app.logger.error('Error processing record [{id}] : {e}'
+                        .format(
+                            id=str(record.get('_id')).strip(),
+                            e=str(e)))
+    try:
+        start_time = datetime.now()
+        db.session.commit()
+        execution_time = datetime.now() - start_time
+        current_app.logger.info('{nb} commited records in {execution_time}.'
+                    .format(nb=len(record_id_iterator),
+                            execution_time=execution_time))
+
+        indexer.bulk_index(holding_id_iterator)
+        indexer.process_bulk_queue()
+        indexer.bulk_index(item_id_iterator)
+        indexer.process_bulk_queue()
+        indexer.bulk_index(record_id_iterator)
+        indexer.process_bulk_queue()
+    except Exception as e:
+        current_app.logger.error(e)
+
+    max_recid = get_max_record_pid('doc')
+    DocumentIdentifier._set_sequence(max_recid)
     db.session.commit()
     indexer.bulk_index(holding_id_iterator)
     indexer.process_bulk_queue()
