@@ -315,9 +315,9 @@ def marc21_to_titlesProper(self, key, value):
     """
     titleParts = []
     for k, v in value.items():
-        if k in ['a', 'p', 'g', 's']:
+        if k in ['a', 'p', 'g', 's', 't']:
             titleParts.append(' '.join(utils.force_list(v)))
-    return ' '.join(titleParts)
+    return ' '.join(titleParts) or None
 
 
 @marc21.over('authors', '[17][01][01]..')
@@ -634,11 +634,68 @@ def marc21_online_resources(self, key, value):
     return {'uri': value.get('u')}
 
 
-@marc21.over('cover_art', '^9564.')
+@marc21.over('electronicLocator', '^[89]564.')
+@utils.for_each_value
 @utils.ignore_value
-def marc21_cover_art(self, key, value):
-    """Get cover art."""
-    return value.get('u')
+def marc21_electronicLocator(self, key, value):
+    """Get electronicLocator from field 856 and 956."""
+    electronic_locator_type = {
+        '0': 'resource',
+        '1': 'versionOfResource',
+        '2': 'relatedResource',
+        '8': 'hiddenUrl'
+    }
+    electronic_locator_content = [
+        'poster',
+        'audio',
+        'postcard',
+        'addition',
+        'debriefing',
+        'exhibitionDocumentation',
+        'erratum',
+        'bookplate',
+        'extract',
+        'educationalSheet',
+        'illustrations',
+        'coverImage',
+        'deliveryInformation',
+        'biographicalInformation',
+        'introductionPreface',
+        'classReading',
+        "teachersKit",
+        "publishersNote",
+        'noteOnContent',
+        'titlePage',
+        'photography',
+        'summarization'
+        "summarization",
+        "onlineResourceViaRERODOC",
+        "pressReview",
+        "webSite",
+        "tableOfContents",
+        "fullText",
+        "video"
+    ]
+    indicator2 = key[4]
+    electronic_locator = {
+        'url': value.get('u'),
+        'type': electronic_locator_type.get(indicator2, 'noInfo')
+    }
+    content = value.get('3')
+    public_note = []
+    if content:
+        if content in electronic_locator_content:
+            electronic_locator['content'] = content
+        if content == 'Book cover':
+            electronic_locator['content'] = 'coverImage'
+        else:
+            public_note.append(content)
+    if value.get('z'):
+        public_note += utils.force_list(value.get('z'))
+        electronic_locator['publicNote'] = public_note
+    return electronic_locator
+    
+
 
 
 @marc21.over('subjects', '^6[0135][01].[06]')

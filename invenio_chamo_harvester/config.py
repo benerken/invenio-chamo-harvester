@@ -15,6 +15,7 @@ from kombu import Exchange, Queue
 CHAMO_HARVESTER_CHAMO_BASE_URL = "http://localhost:8080/rest"
 CHAMO_HARVESTER_CHAMO_USER = ""
 CHAMO_HARVESTER_CHAMO_PASSWORD = ""
+CHAMO_HARVESTER_BULK_SIZE = 1000
 
 CHAMO_HARVESTER_DEFAULT_DOC_TYPE = "doc"
 """Default doc_type to use if no schema is defined."""
