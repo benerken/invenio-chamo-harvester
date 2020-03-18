@@ -17,7 +17,8 @@ from flask import current_app
 from flask.cli import with_appcontext
 from invenio_chamo_harvester.api import ChamoRecordHarvester, ChamoBibRecord
 from invenio_chamo_harvester.tasks import (process_bulk_queue,
-                                           queue_records_to_harvest)
+                                           queue_records_to_harvest,
+                                           bulk_record)
 from invenio_chamo_harvester.utils import get_max_record_pid
 from invenio_pidstore.models import PersistentIdentifier, PIDStatus, RecordIdentifier
 from rero_ils.modules.documents.api import Document
@@ -105,7 +106,7 @@ def run(delayed, concurrency):
 def record(bibid):
     """Run transform to invenio record."""
     if bibid>0:
-        print(ChamoBibRecord.get_record_by_id(bibid).document)
+        print(bulk_record(ChamoBibRecord.get_record_by_id(bibid)))
 
 
 @chamo.command("max_id")

@@ -60,10 +60,12 @@ def list_of_identifiers(data, type):
     return identifiers
 
 
-def remove_punctuation(data):
+def remove_punctuation(data, with_dot=False):
     """Remove punctuation from data."""
     try:
         if data[-1:] == ',':
+            data = data[:-1]
+        if data[-1:] == '.' and with_dot:
             data = data[:-1]
         if data[-2:] == ' :':
             data = data[:-2]
@@ -197,7 +199,7 @@ def marc21_to_language(self, key, value):
             })
             lang_codes.append(lang_value)
     if not language :
-    #     error_print('ERROR LANGUAGE:', marc21.bib_id, 'set to "und"')
+        # error_print('ERROR LANGUAGE:', marc21.bib_id, 'set to "und"')
         language = [{'value': 'und', 'type': 'bf:Language'}]
     return language or None
 
@@ -253,7 +255,7 @@ def marc21_to_identifiedBy_from_field_020(self, key, value):
 
 
 @marc21.over('identifiedBy', '^022..')
-@utils.for_each_value
+#@utils.for_each_value
 @utils.ignore_value
 def marc21_to_identifiedBy_from_field_022(self, key, value):
     """Get identifier from field 022."""
@@ -270,15 +272,19 @@ def marc21_to_identifiedBy_from_field_022(self, key, value):
 
     identifiedBy = self.get('identifiedBy', [])
     for subfield_code in ['a', 'l', 'm', 'y']:
-        subfield_data = value.get(subfield_code, '').strip()
-        if subfield_data:
-            identifier = {}
-            identifier['type'] = type_for[subfield_code]
-            identifier['value'] = subfield_data
-            if subfield_code in status_for:
-                identifier['status'] = status_for[subfield_code]
-            identifiedBy.append(identifier)
-    return None
+        subfields_data = value.get(subfield_code)
+        if subfields_data:
+            if isinstance(subfields_data, str):
+                subfields_data = [subfields_data]
+            for subfield_data in subfields_data:
+                subfield_data = subfield_data.strip()
+                identifier = {}
+                identifier['type'] = type_for[subfield_code]
+                identifier['value'] = subfield_data
+                if subfield_code in status_for:
+                    identifier['status'] = status_for[subfield_code]
+                identifiedBy.append(identifier)
+    return identifiedBy or None
 
 
 @marc21.over('title', '^245..')
@@ -335,7 +341,7 @@ def marc21_to_author(self, key, value):
     authors.relator: 100 $c or 700 $c (facultatif)
     authors.type: if 100 or 700 then person, if 710 then organisation
     """
-    if key[:3] in ['100', '700', '710', '711']:
+    if key[:3] in ['100', '700', '710']:
         author = {}
         author['type'] = 'person'
 
@@ -346,17 +352,20 @@ def marc21_to_author(self, key, value):
 
         # we do not have a $ref
         if not author.get('$ref'):
-            author['name'] = remove_punctuation(value.get('a'))
+            author['name'] = ''
+            if value.get('a'):
+                data = not_repetitive(marc21.bib_id, key, value, 'a')
+                author['name'] = remove_punctuation(data)
             author_subs = utils.force_list(value.get('b'))
             if author_subs:
                 for author_sub in author_subs:
                     author['name'] += ' ' + remove_punctuation(author_sub)
-            if value.get('d'):
-                author['date'] = remove_punctuation(value.get('d'))
 
             if key[:3] == '710':
                 author['type'] = 'organisation'
             else:
+                if value.get('d'):
+                    author['date'] = remove_punctuation(value.get('d'), True)
                 if value.get('c'):
                     author['qualifier'] = ''.join(
                         utils.force_list(value.get('c')))
@@ -447,21 +456,24 @@ def marc21_to_provisionActivity(self, key, value):
                 'a': 'bf:Place',
                 'b': 'bf:Agent'
             }
-            agent_data = {
-                'type': type_per_code[code],
-                'label': [{'value': remove_trailing_punctuation(label)}]
-            }
-            try:
-                alt_gr = marc21.alternate_graphic['260'][link]
-                subfield = \
-                    marc21.get_subfields(alt_gr['field'])[index]
-                agent_data['label'].append({
-                    'value': remove_trailing_punctuation(subfield),
-                    'language': get_language_script(alt_gr['script'])
-                })
-            except Exception as err:
-                pass
-            return agent_data
+            label=remove_trailing_punctuation(label)
+            if label:
+                agent_data = {
+                    'type': type_per_code[code],
+                    'label': [{'value': remove_punctuation(label)}]
+                }
+                try:
+                    alt_gr = marc21.alternate_graphic['260'][link]
+                    subfield = \
+                        marc21.get_subfields(alt_gr['field'])[index]
+                    agent_data['label'].append({
+                        'value': remove_trailing_punctuation(subfield),
+                        'language': get_language_script(alt_gr['script'])
+                    })
+                except Exception as err:
+                    pass
+                return agent_data
+            pass
 
         # function build_statement start here
         tag_link, link = get_field_link_data(field_value)
@@ -472,15 +484,14 @@ def marc21_to_provisionActivity(self, key, value):
             if blob_key in ('a', 'b'):
                 agent_data = build_agent_data(
                     blob_key, blob_value, index, link)
-                statement.append(agent_data)
+                if agent_data:
+                    statement.append(agent_data)
             if blob_key != '__order__':
                 index += 1
         return statement
 
     def build_place():
         place = {}
-        if marc21.cantons:
-            place['canton'] = marc21.cantons[0]
         if marc21.country:
             place['country'] = marc21.country
         if place:
@@ -515,13 +526,17 @@ def marc21_to_provisionActivity(self, key, value):
         place = build_place()
         if place:
             publication['place'] = [place]
-    publication['statement'] = build_statement(value, ind2)
+
+        publication['statement'] = build_statement(value, ind2)
+
     if subfields_c:
-        subfield_c = subfields_c[0]
-        date = {
-            'label': [{'value': subfield_c}],
-            'type': 'Date'
-        }
+        subfield_c = remove_punctuation(subfields_c[0], True)
+        date = None
+        if subfield_c:
+            date = {
+                'label': [{'value': subfield_c}],
+                'type': 'Date'
+            }
 
         tag_link, link = get_field_link_data(value)
         try:
@@ -534,8 +549,10 @@ def marc21_to_provisionActivity(self, key, value):
             })
         except Exception as err:
             pass
-
-        publication['statement'].append(date)
+        if date:
+            publication['statement'].append(date)
+    if not publication['statement']:
+        publication.pop('statement')
     return publication or None
 
 
@@ -577,14 +594,22 @@ def marc21_to_series(self, key, value):
     series.name: [490$a repetitive]
     series.number: [490$v repetitive]
     """
+    
     series = {}
-    name = value.get('a')
+    name = value.get('a') 
     if name:
         series['name'] = ', '.join(utils.force_list(name))
+    else:
+        error_print('WARNING MISSING FIED:', marc21.bib_id, key, value)
+        if value.get('t'):
+            series['name'] = ', '.join(utils.force_list(value.get('t')))
+        else:
+            return None
     number = value.get('v')
     if number:
         series['number'] = ', '.join(utils.force_list(number))
     return series
+    
 
 
 @marc21.over('abstracts', '^520..')
@@ -608,6 +633,9 @@ def marc21_to_notes(self, key, value):
 
     note: [500$a repetitive]
     """
+    if not value.get('a'):
+        error_print('WARNING WRONG MAPPING FIELD:', marc21.bib_id, key, value)
+        return None
     return utils.force_list(value.get('a'))[0]
 
 
@@ -620,18 +648,6 @@ def marc21_to_is_part_of(self, key, value):
     """
     if not self.get('is_part_of', None):
         return value.get('t')
-
-
-@marc21.over('electronic_location', '^8564.')
-@utils.for_each_value
-@utils.ignore_value
-def marc21_online_resources(self, key, value):
-    """Get series.
-
-    series.name: [490$a repetitive]
-    series.number: [490$v repetitive]
-    """
-    return {'uri': value.get('u')}
 
 
 @marc21.over('electronicLocator', '^[89]564.')
@@ -692,6 +708,7 @@ def marc21_electronicLocator(self, key, value):
             public_note.append(content)
     if value.get('z'):
         public_note += utils.force_list(value.get('z'))
+    if public_note:
         electronic_locator['publicNote'] = public_note
     return electronic_locator
     

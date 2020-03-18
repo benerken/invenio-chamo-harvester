@@ -295,3 +295,11 @@ class ChamoBibRecord(object):
                 fg='red'
             )
             return None
+
+    def dumps(self, **kwargs):
+        """Return pure Python dictionary with record metadata."""
+        return {
+            'document': self.document,
+            'holdings': self.holdings,
+            'items': self.items
+        }
