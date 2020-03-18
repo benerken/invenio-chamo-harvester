@@ -130,7 +130,6 @@ def bulk_records(records):
             if record.get('frbr', False):
                 document = record.get('document', {})
                 """
-                # check if already in Rero-ILS
                 pid = None
 
                 for identifier in document.get('identifiedBy') :
@@ -150,143 +149,148 @@ def bulk_records(records):
                     continue
                 else:
                     """
-                document['$schema'] = record_schema
+                # check if already in Rero-ILS
+                rec = Document.get_record_by_pid(document.get('pid'))
+                if rec:
+                    print(rec)
+                else:
+                    document['$schema'] = record_schema
 
-                created_time = datetime.now()
-                current_app.logger.info('create document')
-                document = Document.create(
-                    document,
-                    dbcommit=False,
-                    reindex=False
-                )
-                record_id_iterator.append(document.id)
-                db.session.add(DocumentIdentifier(recid=document.get('pid')))
-                uri_documents = url_api.format(host=host_url,
-                                               doc_type='documents',
-                                               pid=document.get('pid'))
-                
-                map_holdings = {}
-                for holding in record.get('holdings'):
-                    holding['$schema'] = holding_schema
-                    holding['document'] = {
-                        '$ref': uri_documents
-                        }
-                    holding['circulation_category'] = {
-                        '$ref': map_item_type(str(holding.get('circulation_category')))
-                        }
-                    holding['location'] = {
-                        '$ref': map_locations(str(holding.get('location')))
-                        }
-                    
                     created_time = datetime.now()
-
-                    result = Holding.create(
-                        holding,
+                    current_app.logger.info('create document')
+                    document = Document.create(
+                        document,
                         dbcommit=False,
                         reindex=False
                     )
+                    record_id_iterator.append(document.id)
+                    db.session.add(DocumentIdentifier(recid=document.get('pid')))
+                    uri_documents = url_api.format(host=host_url,
+                                                doc_type='documents',
+                                                pid=document.get('pid'))
                     
-                    map_holdings.update({
+                    map_holdings = {}
+                    for holding in record.get('holdings'):
+                        holding['$schema'] = holding_schema
+                        holding['document'] = {
+                            '$ref': uri_documents
+                            }
+                        holding['circulation_category'] = {
+                            '$ref': map_item_type(str(holding.get('circulation_category')))
+                            }
+                        holding['location'] = {
+                            '$ref': map_locations(str(holding.get('location')))
+                            }
+                        
+                        created_time = datetime.now()
+
+                        result = Holding.create(
+                            holding,
+                            dbcommit=False,
+                            reindex=False
+                        )
+                        
+                        map_holdings.update({
+                                '{location}#{cica}'.format(
+                                    location = holding.get('location'),
+                                    cica = holding.get('circulation_category')) : result.get('pid')
+                            }
+                        )
+                        holding_id_iterator.append(result.id)
+                    
+                    for item in record.get('items'):
+                        item['$schema'] = item_schema
+                        item['document'] = {
+                            '$ref': uri_documents
+                            }
+                        item['item_type'] = {
+                            '$ref': map_item_type(str(item.get('item_type')))
+                            }
+                        item['location'] = {
+                            '$ref': map_locations(str(item.get('location')))
+                            }
+
+                        holding_pid = map_holdings.get(
                             '{location}#{cica}'.format(
-                                location = holding.get('location'),
-                                cica = holding.get('circulation_category')) : result.get('pid')
-                        }
-                    )
-                    holding_id_iterator.append(result.id)
-                
-                for item in record.get('items'):
-                    item['$schema'] = item_schema
-                    item['document'] = {
-                        '$ref': uri_documents
-                        }
-                    item['item_type'] = {
-                        '$ref': map_item_type(str(item.get('item_type')))
-                        }
-                    item['location'] = {
-                        '$ref': map_locations(str(item.get('location')))
-                        }
+                                location = item.get('location'),
+                                cica = item.get('item_type')))
+                        if holding_pid is None:
+                            click.secho('holding pid is None for record : {id} '.format(
+                                id=document.pid
+                            ), fg='red')
+                            click.secho('holding map : {map}.'.format(
+                                map=map_holdings), fg='white')
+                            click.secho('item to map : {location}#{cica}'.format(
+                                location = item.get('location'),
+                                cica = item.get('item_type')), fg='yellow')
+                        
+                        item['holding'] = {
+                            '$ref': url_api.format(host=host_url,
+                                        doc_type='holdings',
+                                        pid=holding_pid)
+                            }
 
-                    holding_pid = map_holdings.get(
-                        '{location}#{cica}'.format(
-                            location = item.get('location'),
-                            cica = item.get('item_type')))
-                    if holding_pid is None:
-                        click.secho('holding pid is None for record : {id} '.format(
-                            id=document.pid
-                        ), fg='red')
-                        click.secho('holding map : {map}.'.format(
-                            map=map_holdings), fg='white')
-                        click.secho('item to map : {location}#{cica}'.format(
-                            location = item.get('location'),
-                            cica = item.get('item_type')), fg='yellow')
+                        result = Item.create(
+                            item,
+                            dbcommit=False,
+                            reindex=False
+                        )
+                        # item_pids.append(result.pid)
+                        item_id_iterator.append(result.id)
+                    n_created += 1
+
+                if n_created % bulk_size == 0:
+                    execution_time = datetime.now() - start_time
+                    click.secho('{nb} created records in {execution_time}.'
+                                .format(nb=len(record_id_iterator),
+                                        execution_time=execution_time),
+                                fg='white')
+                    start_time = datetime.now()
+
+                    db.session.commit()
+
+                    execution_time = datetime.now() - start_time
                     
-                    item['holding'] = {
-                        '$ref': url_api.format(host=host_url,
-                                    doc_type='holdings',
-                                    pid=holding_pid)
-                        }
+                    current_app.logger.info('{nb} commited records in {execution_time}.'
+                                .format(nb=len(record_id_iterator),
+                                        execution_time=execution_time))
+                    
+                    click.secho('{nb} commited records in {execution_time}.'
+                                .format(nb=len(record_id_iterator),
+                                        execution_time=execution_time),
+                                fg='white')
+                    start_time = datetime.now()
+                    click.secho('sending {n} holdings to indexer queue.'
+                                .format(n=len(holding_id_iterator)), fg='white')
+                    indexer.bulk_index(holding_id_iterator)
+                    click.secho('process queue...', fg='yellow')
+                    
+                    indexer.process_bulk_queue()
 
-                    result = Item.create(
-                        item,
-                        dbcommit=False,
-                        reindex=False
-                    )
-                    # item_pids.append(result.pid)
-                    item_id_iterator.append(result.id)
-                n_created += 1
+                    click.secho('sending {n} items to indexer queue.'
+                                .format(n=len(item_id_iterator)), fg='white')
+                    indexer.bulk_index(item_id_iterator)
+                    click.secho('process queue...', fg='yellow')
+                    
+                    indexer.process_bulk_queue()
 
-            if n_created % bulk_size == 0:
-                execution_time = datetime.now() - start_time
-                click.secho('{nb} created records in {execution_time}.'
-                            .format(nb=len(record_id_iterator),
-                                    execution_time=execution_time),
-                            fg='white')
-                start_time = datetime.now()
+                    click.secho('sending {n} documents to indexer queue.'
+                                .format(n=len(record_id_iterator)), fg='white')
+                    indexer.bulk_index(record_id_iterator)
+                    click.secho('process queue...', fg='yellow')
+                    
+                    indexer.process_bulk_queue()
 
-                db.session.commit()
+                    execution_time = datetime.now() - start_time
+                    click.secho('indexing records process in {execution_time}.'
+                                .format(execution_time=execution_time),
+                                fg='white')
+                    click.secho('processing next batch records.', fg='green')
 
-                execution_time = datetime.now() - start_time
-                
-                current_app.logger.info('{nb} commited records in {execution_time}.'
-                            .format(nb=len(record_id_iterator),
-                                    execution_time=execution_time))
-                
-                click.secho('{nb} commited records in {execution_time}.'
-                            .format(nb=len(record_id_iterator),
-                                    execution_time=execution_time),
-                            fg='white')
-                start_time = datetime.now()
-                click.secho('sending {n} holdings to indexer queue.'
-                            .format(n=len(holding_id_iterator)), fg='white')
-                indexer.bulk_index(holding_id_iterator)
-                click.secho('process queue...', fg='yellow')
-                
-                indexer.process_bulk_queue()
-
-                click.secho('sending {n} items to indexer queue.'
-                            .format(n=len(item_id_iterator)), fg='white')
-                indexer.bulk_index(item_id_iterator)
-                click.secho('process queue...', fg='yellow')
-                
-                indexer.process_bulk_queue()
-
-                click.secho('sending {n} documents to indexer queue.'
-                            .format(n=len(record_id_iterator)), fg='white')
-                indexer.bulk_index(record_id_iterator)
-                click.secho('process queue...', fg='yellow')
-                
-                indexer.process_bulk_queue()
-
-                execution_time = datetime.now() - start_time
-                click.secho('indexing records process in {execution_time}.'
-                            .format(execution_time=execution_time),
-                            fg='white')
-                click.secho('processing next batch records.', fg='green')
-
-                record_id_iterator.clear()
-                holding_id_iterator.clear()
-                item_id_iterator.clear()
-                start_time = datetime.now()
+                    record_id_iterator.clear()
+                    holding_id_iterator.clear()
+                    item_id_iterator.clear()
+                    start_time = datetime.now()
         
         except Exception as e:
             n_rejected += 1
@@ -316,3 +320,88 @@ def bulk_records(records):
     db.session.commit()
 
     return n_created
+
+
+@shared_task(ignore_result=True)
+def bulk_record(record):
+    """Records creation."""
+    record_schema = current_jsonschemas.path_to_url('documents/document-v0.0.1.json')
+    item_schema = current_jsonschemas.path_to_url('items/item-v0.0.1.json')
+    holding_schema = current_jsonschemas.path_to_url('holdings/holding-v0.0.1.json')
+    host_url = current_app.config.get('RERO_ILS_APP_BASE_URL')
+    url_api = '{host}/api/{doc_type}/{pid}'
+
+    try:
+        document = record.document
+        document['$schema'] = record_schema
+
+        uri_documents = url_api.format(host=host_url,
+                                        doc_type='documents',
+                                        pid=document.get('pid'))
+        
+        map_holdings = {}
+        holdings = []
+        for idx, holding in enumerate(record.holdings):
+            holding['$schema'] = holding_schema
+            holding['document'] = {
+                '$ref': uri_documents
+                }
+            holding['circulation_category'] = {
+                '$ref': map_item_type(str(holding.get('circulation_category')))
+                }
+            holding['location'] = {
+                '$ref': map_locations(str(holding.get('location')))
+                }
+            
+            map_holdings.update({
+                    '{location}#{cica}'.format(
+                        location = holding.get('location'),
+                        cica = holding.get('circulation_category')) : idx
+                }
+            )
+            holdings.append(holding)
+        
+        items = []
+        for item in record.items:
+            item['$schema'] = item_schema
+            item['document'] = {
+                '$ref': uri_documents
+                }
+            item['item_type'] = {
+                '$ref': map_item_type(str(item.get('item_type')))
+                }
+            item['location'] = {
+                '$ref': map_locations(str(item.get('location')))
+                }
+
+            holding_pid = map_holdings.get(
+                '{location}#{cica}'.format(
+                    location = item.get('location'),
+                    cica = item.get('item_type')))
+            if holding_pid is None:
+                click.secho('holding pid is None for record : {id} '.format(
+                    id=document.get('pid')
+                ), fg='red')
+                click.secho('holding map : {map}.'.format(
+                    map=map_holdings), fg='white')
+                click.secho('item to map : {location}#{cica}'.format(
+                    location = item.get('location'),
+                    cica = item.get('item_type')), fg='yellow')
+            
+            item['holding'] = {
+                '$ref': url_api.format(host=host_url,
+                            doc_type='holdings',
+                            pid=holding_pid)
+                }
+
+            items.append(item)
+        return {
+            'document' : document,
+            'holdings' : holdings,
+            'items': items
+        }
+    except Exception as e:
+        current_app.logger.error('Error converting record [{id}] : {e}'
+                    .format(
+                        id=str(record.get('_id')).strip(), 
+                        e=str(e)))

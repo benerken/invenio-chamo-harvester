@@ -73,11 +73,13 @@ def map_item_type(type):
 
 def map_locations(location):
     """Returns mapped location."""
+    # location 200000 can be removed after production correction
     locations = {
         "100000": "https://ils.rero.ch/api/locations/1",
         "100001": "https://ils.rero.ch/api/locations/2",
         "100002": "https://ils.rero.ch/api/locations/3",
         "100003": "https://ils.rero.ch/api/locations/4",
+        "200000": "https://ils.rero.ch/api/locations/5",
         "200002": "https://ils.rero.ch/api/locations/5",
         "200003": "https://ils.rero.ch/api/locations/6",
         "200004": "https://ils.rero.ch/api/locations/7",
@@ -131,6 +133,7 @@ def map_locations(location):
         "20700002": "https://ils.rero.ch/api/locations/56",
         "20700003": "https://ils.rero.ch/api/locations/57",
         "20700004": "https://ils.rero.ch/api/locations/58",
+        "21000000": "https://ils.rero.ch/api/locations/59",
         "21000001": "https://ils.rero.ch/api/locations/59",
         "21000002": "https://ils.rero.ch/api/locations/60",
         "21000003": "https://ils.rero.ch/api/locations/61",
