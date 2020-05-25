@@ -20,7 +20,7 @@ import requests
 from celery import shared_task
 from flask import current_app
 from invenio_db import db
-from invenio_indexer.api import RecordIndexer
+from rero_ils.modules.api import IlsRecordsIndexer
 from invenio_jsonschemas import current_jsonschemas
 
 from rero_ils.modules.documents.api import Document, DocumentsSearch
@@ -118,7 +118,7 @@ def bulk_records(records):
     record_id_iterator = []
     item_id_iterator = []
     holding_id_iterator = []
-    indexer = RecordIndexer()
+    indexer = IlsRecordsIndexer()
     start_time = datetime.now()
     for record in records:
         try:
@@ -163,10 +163,12 @@ def bulk_records(records):
                     uri_documents = url_api.format(host=host_url,
                                                 doc_type='documents',
                                                 pid=document.get('pid'))
-
+                    holdings_type = 'serial' if document.get(
+                        'type') == 'journal' else 'standard'
                     map_holdings = {}
                     for holding in record.get('holdings'):
                         holding['$schema'] = holding_schema
+                        holding['holdings_type'] = holdings_type
                         holding['document'] = {
                             '$ref': uri_documents
                             }
@@ -339,10 +341,13 @@ def bulk_record(record):
                                         doc_type='documents',
                                         pid=document.get('pid'))
 
+        holdings_type = 'serial' if document.get('type') == 'journal' else 'standard'
+
         map_holdings = {}
         holdings = []
         for idx, holding in enumerate(record.holdings):
             holding['$schema'] = holding_schema
+            holding['holdings_type'] = holdings_type
             holding['document'] = {
                 '$ref': uri_documents
                 }

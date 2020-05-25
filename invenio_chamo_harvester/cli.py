@@ -11,6 +11,7 @@
 from __future__ import absolute_import, print_function
 
 import click
+import json
 import yaml
 from celery.messaging import establish_connection
 from flask import current_app
@@ -20,6 +21,7 @@ from invenio_chamo_harvester.tasks import (process_bulk_queue,
                                            queue_records_to_harvest,
                                            bulk_record)
 from invenio_chamo_harvester.utils import get_max_record_pid
+from invenio_jsonschemas import current_jsonschemas
 from invenio_pidstore.models import PersistentIdentifier, PIDStatus, RecordIdentifier
 from rero_ils.modules.documents.api import Document
 from rero_ils.modules.documents.models import DocumentIdentifier
@@ -106,7 +108,23 @@ def run(delayed, concurrency):
 def record(bibid):
     """Run transform to invenio record."""
     if bibid>0:
-        print(bulk_record(ChamoBibRecord.get_record_by_id(bibid)))
+        print(json.dumps(bulk_record(ChamoBibRecord.get_record_by_id(bibid))))
+
+@chamo.command("document")
+@click.option('--bibid', '-i', default=0, type=int,
+              help='BIBID of the record.')
+@with_appcontext
+def document(bibid):
+    """Run transform to invenio record."""
+    if bibid>0:
+        record_schema = current_jsonschemas.path_to_url(
+            'documents/document-v0.0.1.json')
+        record = ChamoBibRecord.get_record_by_id(bibid)
+        document = record.document
+        document['$schema'] = record_schema
+        result = []
+        result.append(document)
+        print(json.dumps(result))
 
 
 @chamo.command("max_id")
