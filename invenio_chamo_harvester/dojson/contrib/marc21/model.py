@@ -36,8 +36,10 @@ from isbnlib import EAN13, clean, to_isbn13
 
 from flask import current_app
 
-from rero_ils.dojson.utils import ReroIlsMarc21Overdo, error_print, \
-    get_field_items, get_field_link_data, make_year, not_repetitive, \
+from rero_ils.dojson.utils import ReroIlsMarc21Overdo, \
+    TitlePartList, add_note, build_responsibility_data, error_print, \
+    extract_subtitle_and_parallel_titles_from_field_245_b, get_field_items, \
+    get_field_link_data, make_year, not_repetitive, \
     remove_trailing_punctuation
 
 marc21 = ReroIlsMarc21Overdo()
@@ -112,24 +114,49 @@ def get_language_script(script):
     return '-'.join(['und', script])
 
 
-def get_mef_person_link(id, key, value):
-    """Get mef person link."""
+def get_person_link(bibid, id, key, value):
+    """Get MEF person link."""
     # https://mef.test.rero.ch/api/mef/?q=viaf_pid:67752559
     prod_host = 'mef.rero.ch'
     test_host = current_app.config['RERO_ILS_MEF_HOST'] #'mef.test.rero.ch'
+    mef_url = 'https://{host}/api/'.format(host=test_host)
     mef_link = None
-    if id:
+    try:
         url = "{mef}/?q=viaf_pid:{viaf_pid}&size=1".format(
             mef="https://{host}/api/mef".format(host=test_host),
             viaf_pid=id,
         )
         request = requests.get(url=url)
         if request.status_code == requests.codes.ok:
+            pid = None
             data = request.json()
             hits = data.get('hits', {}).get('hits')
             if hits:
-                mef_link = hits[0].get('links').get('self')
+                idref = hits[0].get('metadata', {}).get('idref')
+                gnd = hits[0].get('metadata', {}).get('gnd')
+                rero = hits[0].get('metadata', {}).get('rero')
+                if idref:
+                    pid_type = 'idref'
+                    pid = idref['pid']
+                elif gnd:
+                    pid_type = 'gnd'
+                    pid = gnd['pid']
+                elif rero:
+                    pid_type = 'rero'
+                    pid = rero['pid']
+            if pid:
+                mef_link = "{url}{pid_type}/{pid}".format(
+                    url=mef_url,
+                    pid_type=pid_type,
+                    pid=pid
+                )
                 mef_link = mef_link.replace(test_host, prod_host)
+        else:
+            error_print('ERROR MEF REQUEST:', bibid, url,
+                        request.status_code)
+
+    except Exception as err:
+        error_print('WARNING NOT MEF REF:', bibid, id, key, value)
     return mef_link
 
 
@@ -205,23 +232,23 @@ def marc21_to_language(self, key, value):
 
 
 @marc21.over('identifiedBy', '^020..')
-@utils.for_each_value
 @utils.ignore_value
 def marc21_to_identifiedBy_from_field_020(self, key, value):
     """Get identifier from field 020."""
     def build_identifier_from(subfield_data, status=None):
         subfield_data = subfield_data.strip()
         identifier = {'value': subfield_data}
-        subfield_c = value.get('c', '').strip()
+        subfield_c = not_repetitive(
+            marc21.bib_id, key, value, 'c', default='').strip()
         if subfield_c:
             identifier['acquisitionTerms'] = subfield_c
         if value.get('q'):  # $q is repetitive
             identifier['qualifier'] = \
                 ', '.join(utils.force_list(value.get('q')))
 
-        match = re.search(r'^(.+?)\s*\((.*)\)$', subfield_data)
+        match = re.search(r'^(.+?)\s*\((.+)\)$', subfield_data)
         if match:
-            # match.group(2): parentheses content
+            # match.group(2) : parentheses content
             identifier['qualifier'] = ', '.join(
                 filter(
                     None,
@@ -236,26 +263,17 @@ def marc21_to_identifiedBy_from_field_020(self, key, value):
         identifiedBy.append(identifier)
 
     identifiedBy = self.get('identifiedBy', [])
-    isbns = list_of_identifiers(identifiedBy, 'bf:isbn')
-
-    subfield_a = value.get('a')
+    subfield_a = not_repetitive(marc21.bib_id, key, value, 'a')
     if subfield_a:
-        for isbn_value in utils.force_list(subfield_a):
-            if isbn_value not in isbns:
-                build_identifier_from(isbn_value)
-
-    subfield_z = value.get('z')
-    if subfield_z:
-        for isbn_value in utils.force_list(subfield_z):
-            if isbn_value not in isbns:
-                build_identifier_from(isbn_value,
-                                      status='invalid or cancelled')
-
-    return None
+        build_identifier_from(subfield_a)
+    subfields_z = value.get('z')
+    if subfields_z:
+        for subfield_z in utils.force_list(subfields_z):
+            build_identifier_from(subfield_z, status='invalid or cancelled')
+    return identifiedBy or None
 
 
 @marc21.over('identifiedBy', '^022..')
-#@utils.for_each_value
 @utils.ignore_value
 def marc21_to_identifiedBy_from_field_022(self, key, value):
     """Get identifier from field 022."""
@@ -290,25 +308,106 @@ def marc21_to_identifiedBy_from_field_022(self, key, value):
 @marc21.over('title', '^245..')
 @utils.ignore_value
 def marc21_to_title(self, key, value):
-    """Get title.
-
-    title: 245 $a $b $c $h $n $p
-    NB : ordered subfield like in virtua
-     $a $b $n $p $c $h OR $a $n $p $b $c $h "
+    """Get title data.
+    The title data are extracted from the following fields:
+    field 245:
+        $a : non repetitive
+        $b : non repetitive
+        $c : non repetitive
+        $n : repetitive
+        $p : repetitive
+        $6 : non repetitive
+    field 246:
+        $a : non repetitive
+        $n : repetitive
+        $p : repetitive
+        $6 : non repetitive
     """
-    field_map = {
-        'a': 'title',
-        'b': 'remainder_of_title',
-        'c': 'statement_of_responsibility',
-        'h': 'medium',
-        'n': 'number_of_part_section_of_a_work',
-        'p': 'name_of_part_section_of_a_work',
-    }
-    titleParts = []
-    for k, v in value.items():
-        if k in ['a', 'b', 'n', 'p', 'c', 'h']:
-            titleParts.append(' '.join(utils.force_list(v)))
-    return ' '.join(titleParts)
+    # extraction and initialization of data for further processing
+    subfield_245_a = ''
+    subfield_245_b = ''
+    fields_245 = marc21.get_fields(tag='245')
+    if fields_245:
+        subfields_245_a = marc21.get_subfields(fields_245[0], 'a')
+        subfields_245_b = marc21.get_subfields(fields_245[0], 'b')
+        if subfields_245_a:
+            subfield_245_a = subfields_245_a[0]
+        if subfields_245_b:
+            subfield_245_b = subfields_245_b[0]
+    field_245_a_end_with_equal = re.search(r'\s*=\s*$', subfield_245_a)
+    field_245_a_end_with_colon = re.search(r'\s*:\s*$', subfield_245_a)
+    field_245_a_end_with_semicolon = re.search(r'\s*;\s*$', subfield_245_a)
+    field_245_b_contains_equal = re.search(r'=', subfield_245_b)
+
+    fields_246 = marc21.get_fields(tag='246')
+    subfield_246_a = ''
+    if fields_246:
+        subfields_246_a = marc21.get_subfields(fields_246[0], 'a')
+        if subfields_246_a:
+            subfield_246_a = subfields_246_a[0]
+
+    tag_link, link = get_field_link_data(value)
+    items = get_field_items(value)
+    index = 1
+    title_list = []
+    title_data = {}
+    part_list = TitlePartList(
+                    part_number_code='n',
+                    part_name_code='p'
+                )
+    parallel_titles = []
+    pararalel_title_data_list = []
+    pararalel_title_string_set = set()
+    responsibility = {}
+
+    # parse field 245 subfields for extracting:
+    # main title, subtitle, parallel titles and the title parts
+    subfield_selection = {'a', 'b', 'c', 'n', 'p'}
+    for blob_key, blob_value in items:
+        if blob_key in subfield_selection:
+            value_data = marc21.build_value_with_alternate_graphic(
+                '245', blob_key, blob_value, index, link, ',.', ':;/-=')
+            if blob_key in {'a', 'b', 'c'}:
+                subfield_selection.remove(blob_key)
+            if blob_key == 'a':
+                title_data['mainTitle'] = value_data
+            elif blob_key == 'b':
+                if subfield_246_a:
+                    subtitle, parallel_titles, pararalel_title_string_set = \
+                        extract_subtitle_and_parallel_titles_from_field_245_b(
+                            value_data, field_245_a_end_with_equal)
+                    if subtitle:
+                        title_data['subtitle'] = subtitle
+                elif not subfield_246_a:
+                    title_data['subtitle'] = value_data
+            elif blob_key == 'c':
+                responsibility = build_responsibility_data(value_data)
+            elif blob_key in ['n', 'p']:
+                part_list.update_part(value_data, blob_key, blob_value)
+        if blob_key != '__order__':
+            index += 1
+    title_data['type'] = 'bf:Title'
+    the_part_list = part_list.get_part_list()
+    if the_part_list:
+        title_data['part'] = the_part_list
+    if title_data:
+        title_list.append(title_data)
+    for parallel_title in parallel_titles:
+        title_list.append(parallel_title)
+
+    # extract variant titles
+    variant_title_list = \
+        marc21.build_variant_title_data(pararalel_title_string_set)
+    for variant_title_data in variant_title_list:
+        title_list.append(variant_title_data)
+
+    # extract responsibilities
+    if responsibility:
+        new_responsibility = self.get('responsibilityStatement', [])
+        for resp in responsibility:
+            new_responsibility.append(resp)
+        self['responsibilityStatement'] = new_responsibility
+    return title_list or None
 
 
 @marc21.over('titlesProper', '^[17]30..')
@@ -326,49 +425,46 @@ def marc21_to_titlesProper(self, key, value):
     return ' '.join(titleParts) or None
 
 
-@marc21.over('authors', '[17][01][01]..')
+@marc21.over('authors', '[17][01]0..')
 @utils.for_each_value
 @utils.ignore_value
 def marc21_to_author(self, key, value):
     """Get author.
-
     authors: loop:
     authors.name: 100$a [+ 100$b if it exists] or
         [700$a (+$b if it exists) repetitive] or
         [ 710$a repetitive (+$b if it exists, repetitive)]
     authors.date: 100 $d or 700 $d (facultatif)
     authors.qualifier: 100 $c or 700 $c (facultatif)
-    authors.relator: 100 $c or 700 $c (facultatif)
     authors.type: if 100 or 700 then person, if 710 then organisation
     """
-    if key[:3] in ['100', '700', '710']:
+    if not key[4] == '2':
         author = {}
         author['type'] = 'person'
-
-        if value.get('a'):
-            ref = get_mef_person_link(value.get('0'), key, value)
+        if value.get('0'):
+            ref = get_person_link(marc21.bib_id, value.get('0'), key, value)
             if ref:
                 author['$ref'] = ref
-
         # we do not have a $ref
         if not author.get('$ref'):
             author['name'] = ''
             if value.get('a'):
                 data = not_repetitive(marc21.bib_id, key, value, 'a')
-                author['name'] = remove_punctuation(data)
+                author['name'] = remove_trailing_punctuation(data)
             author_subs = utils.force_list(value.get('b'))
             if author_subs:
                 for author_sub in author_subs:
-                    author['name'] += ' ' + remove_punctuation(author_sub)
-
+                    author['name'] += ' ' + \
+                        remove_trailing_punctuation(author_sub)
             if key[:3] == '710':
                 author['type'] = 'organisation'
             else:
-                if value.get('d'):
-                    author['date'] = remove_punctuation(value.get('d'), True)
                 if value.get('c'):
-                    author['qualifier'] = ''.join(
-                        utils.force_list(value.get('c')))
+                    data = not_repetitive(marc21.bib_id, key, value, 'c')
+                    author['qualifier'] = remove_trailing_punctuation(data)
+                if value.get('d'):
+                    data = not_repetitive(marc21.bib_id, key, value, 'd')
+                    author['date'] = remove_trailing_punctuation(data)
         return author
     else:
         return None
@@ -380,18 +476,11 @@ def marc21_to_copyright_date(self, key, value):
     copyright_dates = self.get('copyrightDate', [])
     copyrights_date = utils.force_list(value.get('c'))
     if copyrights_date:
-        copyright_per_code = {
-            'c': '©',
-            'p': '℗',
-            '©': '©',
-            '℗': '℗'
-        }
         for copyright_date in copyrights_date:
-            match = re.search(r'^([©℗c])+\s*(\d{4}.*)', copyright_date)
+            match = re.search(r'^([©℗])+\s*(\d{4}.*)', copyright_date)
             if match:
-
                 copyright_date = ' '.join((
-                    copyright_per_code[match.group(1)] ,
+                    match.group(1),
                     match.group(2)
                 ))
                 copyright_dates.append(copyright_date)
@@ -457,7 +546,7 @@ def marc21_to_provisionActivity(self, key, value):
                 'b': 'bf:Agent'
             }
             label=remove_trailing_punctuation(label)
-            if label:
+            if label and not re.match(r'\[\s?(s|S)\.(d|D|n|N|l|e)\.?\]', label):
                 agent_data = {
                     'type': type_per_code[code],
                     'label': [{'value': remove_punctuation(label)}]
@@ -492,6 +581,8 @@ def marc21_to_provisionActivity(self, key, value):
 
     def build_place():
         place = {}
+        if re.match(r'\[\s?(s|S)\.(d|D|n|N|l|e)\.?\]', marc21.country): 
+            return place
         if marc21.country:
             place['country'] = marc21.country
         if place:
@@ -556,33 +647,26 @@ def marc21_to_provisionActivity(self, key, value):
     return publication or None
 
 
-@marc21.over('formats', '^300..')
+@marc21.over('extent', '^300..')
 @utils.ignore_value
 def marc21_to_description(self, key, value):
-    """Get extent, otherMaterialCharacteristics, formats.
-
-    extent: 300$a (the first one if many)
-    otherMaterialCharacteristics: 300$b (the first one if many)
-    formats: 300 [$c repetitive]
+    """Get physical description.
+    Extract:
+        - extent
+        - duration
+        - colorContent
+        - productionMethod
+        - illustrativeContent
+        - note of type otherPhysicalDetails and accompanyingMaterial
+        - book_formats
+        - dimensions
+    300 [$a repetitive]: extent, duration:
+    300 [$a non repetitive]: colorContent, productionMethod,
+        illustrativeContent, note of type otherPhysicalDetails
+    300 [$c repetitive]: dimensions, book_formats
     """
-    if value.get('a'):
-        if not self.get('extent', None):
-            self['extent'] = remove_punctuation(
-                utils.force_list(value.get('a'))[0]
-            )
-    if value.get('b'):
-        if self.get('otherMaterialCharacteristics', []) == []:
-            self['otherMaterialCharacteristics'] = remove_punctuation(
-                utils.force_list(value.get('b'))[0]
-            )
-    if value.get('c'):
-        formats = self.get('formats', None)
-        if not formats:
-            data = value.get('c')
-            formats = list(utils.force_list(data))
-        return formats
-    else:
-        return None
+    marc21.extract_description_from_marc_field(key, value, self)
+    return None
 
 
 @marc21.over('series', '^440..')
@@ -625,18 +709,20 @@ def marc21_to_abstracts(self, key, value):
     return ', '.join(utils.force_list(value.get('a')))
 
 
-@marc21.over('notes', '^500..')
+@marc21.over('note', '^500..')
 @utils.for_each_value
 @utils.ignore_value
 def marc21_to_notes(self, key, value):
     """Get  notes.
-
     note: [500$a repetitive]
     """
-    if not value.get('a'):
-        error_print('WARNING WRONG MAPPING FIELD:', marc21.bib_id, key, value)
-        return None
-    return utils.force_list(value.get('a'))[0]
+    add_note(
+        dict(
+            noteType='general',
+            label=not_repetitive(marc21.bib_id, key, value, 'a')
+        ),
+        self)
+    return None
 
 
 @marc21.over('is_part_of', '^773..')
@@ -650,11 +736,11 @@ def marc21_to_is_part_of(self, key, value):
         return value.get('t')
 
 
-@marc21.over('electronicLocator', '^[89]564.')
+@marc21.over('electronicLocator', '^856..')
 @utils.for_each_value
 @utils.ignore_value
-def marc21_electronicLocator(self, key, value):
-    """Get electronicLocator from field 856 and 956."""
+def marc21_to_electronicLocator_from_field_856(self, key, value):
+    """Get electronicLocator from field 856."""
     electronic_locator_type = {
         '0': 'resource',
         '1': 'versionOfResource',
@@ -702,13 +788,10 @@ def marc21_electronicLocator(self, key, value):
     if content:
         if content in electronic_locator_content:
             electronic_locator['content'] = content
-        if content == 'Book cover':
-            electronic_locator['content'] = 'coverImage'
         else:
             public_note.append(content)
     if value.get('z'):
         public_note += utils.force_list(value.get('z'))
-    if public_note:
         electronic_locator['publicNote'] = public_note
     return electronic_locator
     
