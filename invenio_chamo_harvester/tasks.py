@@ -22,8 +22,9 @@ from flask import current_app
 from invenio_db import db
 from rero_ils.modules.api import IlsRecordsIndexer
 from invenio_jsonschemas import current_jsonschemas
-
 from rero_ils.modules.documents.api import Document, DocumentsSearch
+from rero_ils.modules.documents.models import DocumentIdentifier
+from rero_ils.modules.holdings.api import Holding
 from rero_ils.modules.items.api import Item
 from .utils import get_max_record_pid
 
