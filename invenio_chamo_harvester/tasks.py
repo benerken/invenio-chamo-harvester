@@ -260,21 +260,21 @@ def bulk_records(records):
                     start_time = datetime.now()
                     click.secho('sending {n} holdings to indexer queue.'
                                 .format(n=len(holding_id_iterator)), fg='white')
-                    indexer.bulk_index(holding_id_iterator)
+                    indexer.bulk_index(holding_id_iterator, doc_type='hold')
                     click.secho('process queue...', fg='yellow')
 
                     indexer.process_bulk_queue()
 
                     click.secho('sending {n} items to indexer queue.'
                                 .format(n=len(item_id_iterator)), fg='white')
-                    indexer.bulk_index(item_id_iterator)
+                    indexer.bulk_index(item_id_iterator, doc_type='item')
                     click.secho('process queue...', fg='yellow')
 
                     indexer.process_bulk_queue()
 
                     click.secho('sending {n} documents to indexer queue.'
                                 .format(n=len(record_id_iterator)), fg='white')
-                    indexer.bulk_index(record_id_iterator)
+                    indexer.bulk_index(record_id_iterator, doc_type='doc')
                     click.secho('process queue...', fg='yellow')
 
                     indexer.process_bulk_queue()
@@ -304,11 +304,11 @@ def bulk_records(records):
                     .format(nb=len(record_id_iterator),
                             execution_time=execution_time))
 
-        indexer.bulk_index(holding_id_iterator)
+        indexer.bulk_index(holding_id_iterator, doc_type='hold')
         indexer.process_bulk_queue()
-        indexer.bulk_index(item_id_iterator)
+        indexer.bulk_index(item_id_iterator, doc_type='item')
         indexer.process_bulk_queue()
-        indexer.bulk_index(record_id_iterator)
+        indexer.bulk_index(record_id_iterator, doc_type='doc')
         indexer.process_bulk_queue()
     except Exception as e:
         current_app.logger.error(e)
@@ -316,11 +316,11 @@ def bulk_records(records):
     max_recid = get_max_record_pid('doc')
     DocumentIdentifier._set_sequence(max_recid)
     db.session.commit()
-    indexer.bulk_index(holding_id_iterator)
+    indexer.bulk_index(holding_id_iterator, doc_type='hold')
     indexer.process_bulk_queue()
-    indexer.bulk_index(item_id_iterator)
+    indexer.bulk_index(item_id_iterator, doc_type='item')
     indexer.process_bulk_queue()
-    indexer.bulk_index(record_id_iterator)
+    indexer.bulk_index(record_id_iterator, doc_type='doc')
     indexer.process_bulk_queue()
     return n_created
 
